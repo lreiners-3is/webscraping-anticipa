@@ -1,0 +1,82 @@
+name: Extracción
+
+# Por ahora solo se ejecuta a mano desde la pestaña Actions.
+# El horario se activa después de revisar la primera corrida:
+#   cron: "0 0,12,18 * * *"   (7:00, 13:00 y 19:00 en Colombia)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Nunca dos corridas a la vez sobre la misma carpeta de Drive.
+concurrency:
+  group: extraccion
+  cancel-in-progress: false
+
+env:
+  REMOTO: "drive:Anticipa Webscrapping/OUTPUT"
+  CARPETA_LOCAL: /home/runner/output
+
+jobs:
+  extraer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      # actions/checkout v4.2.2, fijado a una versión exacta
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone fuse3 > /dev/null
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r requirements.txt
+
+      - name: Configurar acceso a Drive
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s' "$RCLONE_CONF" | tr -d '\r' > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Montar la carpeta de Drive
+        run: |
+          mkdir -p "$CARPETA_LOCAL"
+          rclone mkdir "$REMOTO"
+          rclone mount "$REMOTO" "$CARPETA_LOCAL" --daemon \
+            --vfs-cache-mode writes --vfs-write-back 0s \
+            --rc --rc-no-auth --rc-addr 127.0.0.1:5572
+          for _ in $(seq 1 30); do
+            mountpoint -q "$CARPETA_LOCAL" && exit 0
+            sleep 2
+          done
+          echo "No se pudo montar la carpeta de Drive"
+          exit 1
+
+      - name: Ejecutar la extracción
+        env:
+          OUTPUT_WEBSCRAPING: ${{ env.CARPETA_LOCAL }}
+        run: .venv/bin/python scripts/ejecutar_notebook.py
+
+      # Espera a que todo termine de subirse a Drive antes de cerrar.
+      - name: Terminar de subir a Drive
+        if: always()
+        run: |
+          mountpoint -q "$CARPETA_LOCAL" || exit 0
+          for _ in $(seq 1 240); do
+            PENDIENTES=$(rclone rc vfs/stats --url http://127.0.0.1:5572 --no-auth 2>/dev/null \
+              | jq '.diskCache.uploadsInProgress + .diskCache.uploadsQueued' || echo error)
+            if [ "$PENDIENTES" = "0" ]; then
+              fusermount3 -u "$CARPETA_LOCAL"
+              echo "Subida a Drive completa"
+              exit 0
+            fi
+            echo "Archivos pendientes de subir: $PENDIENTES"
+            sleep 15
+          done
+          echo "Se agotó el tiempo de espera; pueden faltar archivos en Drive"
+          exit 1
