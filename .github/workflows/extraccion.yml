@@ -31,7 +31,14 @@ jobs:
       - name: Instalar dependencias
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq rclone fuse3 > /dev/null
+          sudo apt-get install -y -qq fuse3 unzip > /dev/null
+          # rclone con versión y firma fijas: el de apt no funciona con fuse3
+          curl -fsSL -o rclone.zip https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
+          echo "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702  rclone.zip" | sha256sum -c -
+          unzip -q -j rclone.zip '*/rclone' -d rclone-bin
+          sudo install -m 755 rclone-bin/rclone /usr/local/bin/rclone
+          rm -rf rclone.zip rclone-bin
+          rclone version | head -1
           python3 -m venv .venv
           .venv/bin/pip install --quiet -r requirements.txt
 
@@ -49,12 +56,15 @@ jobs:
           rclone mkdir "$REMOTO"
           rclone mount "$REMOTO" "$CARPETA_LOCAL" --daemon \
             --vfs-cache-mode writes --vfs-write-back 0s \
-            --rc --rc-no-auth --rc-addr 127.0.0.1:5572
+            --rc --rc-no-auth --rc-addr 127.0.0.1:5572 \
+            --log-level NOTICE --log-file "$HOME/rclone-mount.log" \
+            || echo "rclone mount terminó con error"
           for _ in $(seq 1 30); do
             mountpoint -q "$CARPETA_LOCAL" && exit 0
             sleep 2
           done
-          echo "No se pudo montar la carpeta de Drive"
+          echo "No se pudo montar la carpeta de Drive. Registro de rclone:"
+          tail -n 30 "$HOME/rclone-mount.log" || true
           exit 1
 
       - name: Ejecutar la extracción
