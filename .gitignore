@@ -1,0 +1,27 @@
+# Claves y credenciales: nunca se suben
+rclone.conf
+*.conf
+.env
+.env.*
+credentials*.json
+*service*account*.json
+token*.json
+*.pem
+*.key
+
+# Datos y salidas: viven en Google Drive
+OUTPUT/
+*.pdf
+*.csv
+*.xlsx
+*.dbf
+*.shp
+*.shx
+*.prj
+*.log
+
+# Entorno local
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/

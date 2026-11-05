@@ -1,0 +1,26 @@
+name: Prueba de conexión
+
+# Solo se ejecuta a mano desde la pestaña Actions. No usa claves.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # actions/checkout v4.2.2, fijado a una versión exacta
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Instalar dependencias
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet requests
+
+      - name: Probar conexión con las fuentes
+        run: .venv/bin/python scripts/prueba_conexion.py
