@@ -1,9 +1,9 @@
 name: Extracción
 
-# Por ahora solo se ejecuta a mano desde la pestaña Actions.
-# El horario se activa después de revisar la primera corrida:
-#   cron: "0 0,12,18 * * *"   (7:00, 13:00 y 19:00 en Colombia)
+# Se ejecuta a las 7:00, 13:00 y 19:00 en Colombia (UTC-5), y también a mano.
 on:
+  schedule:
+    - cron: "0 0,12,18 * * *"
   workflow_dispatch:
 
 permissions:
