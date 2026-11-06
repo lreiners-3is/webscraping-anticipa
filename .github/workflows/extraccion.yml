@@ -30,9 +30,7 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq fuse3 unzip > /dev/null
-          # rclone con versión y firma fijas: el de apt no funciona con fuse3
+          # rclone con versión y firma fijas
           curl -fsSL -o rclone.zip https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
           echo "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702  rclone.zip" | sha256sum -c -
           unzip -q -j rclone.zip '*/rclone' -d rclone-bin
@@ -50,43 +48,26 @@ jobs:
           printf '%s' "$RCLONE_CONF" | tr -d '\r' > ~/.config/rclone/rclone.conf
           chmod 600 ~/.config/rclone/rclone.conf
 
-      - name: Montar la carpeta de Drive
+      # Se trabaja sobre una copia local: el historial, las huellas y los
+      # archivos existentes vienen de Drive.
+      - name: Traer OUTPUT desde Drive
+        id: traer
         run: |
           mkdir -p "$CARPETA_LOCAL"
           rclone mkdir "$REMOTO"
-          rclone mount "$REMOTO" "$CARPETA_LOCAL" --daemon \
-            --vfs-cache-mode writes --vfs-write-back 0s \
-            --rc --rc-no-auth --rc-addr 127.0.0.1:5572 \
-            --log-level NOTICE --log-file "$HOME/rclone-mount.log" \
-            || echo "rclone mount terminó con error"
-          for _ in $(seq 1 30); do
-            mountpoint -q "$CARPETA_LOCAL" && exit 0
-            sleep 2
-          done
-          echo "No se pudo montar la carpeta de Drive. Registro de rclone:"
-          tail -n 30 "$HOME/rclone-mount.log" || true
-          exit 1
+          rclone copy "$REMOTO" "$CARPETA_LOCAL" --checksum --stats 1m --stats-one-line
 
       - name: Ejecutar la extracción
         env:
           OUTPUT_WEBSCRAPING: ${{ env.CARPETA_LOCAL }}
         run: .venv/bin/python scripts/ejecutar_notebook.py
 
-      # Espera a que todo termine de subirse a Drive antes de cerrar.
-      - name: Terminar de subir a Drive
-        if: always()
+      # Sube también si un módulo falló, para no perder lo de los demás.
+      # Solo sube lo que cambió. Si Drive no recibe algo, el paso da error.
+      # --max-delete evita un borrado masivo si algo sale mal.
+      - name: Sincronizar con Drive
+        if: always() && steps.traer.outcome == 'success'
         run: |
-          mountpoint -q "$CARPETA_LOCAL" || exit 0
-          for _ in $(seq 1 240); do
-            PENDIENTES=$(rclone rc vfs/stats --url http://127.0.0.1:5572 --no-auth 2>/dev/null \
-              | jq '.diskCache.uploadsInProgress + .diskCache.uploadsQueued' || echo error)
-            if [ "$PENDIENTES" = "0" ]; then
-              fusermount3 -u "$CARPETA_LOCAL"
-              echo "Subida a Drive completa"
-              exit 0
-            fi
-            echo "Archivos pendientes de subir: $PENDIENTES"
-            sleep 15
-          done
-          echo "Se agotó el tiempo de espera; pueden faltar archivos en Drive"
-          exit 1
+          rclone sync "$CARPETA_LOCAL" "$REMOTO" --checksum --max-delete 100 \
+            --exclude "*.part" --exclude "*.tmp" --stats 1m --stats-one-line
+          echo "Sincronización con Drive completa"
