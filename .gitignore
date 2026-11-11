@@ -25,3 +25,6 @@ OUTPUT/
 venv/
 __pycache__/
 .ipynb_checkpoints/
+
+# Documento de contexto: solo local
+CONTEXTO_PROYECTO.md
