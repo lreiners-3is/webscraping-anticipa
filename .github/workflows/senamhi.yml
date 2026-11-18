@@ -4,7 +4,7 @@ name: SENAMHI
 # flujo corre en un runner propio (el PC, etiqueta "senamhi").
 # Se lanza al terminar cada corrida de "Extracción", para no coincidir con su
 # sincronización con Drive, y también a mano.
-# Solo lee y escribe la carpeta senamhi_alertas_diaria de Drive.
+# Solo lee y escribe las carpetas del SENAMHI en Drive (CARPETAS).
 on:
   workflow_run:
     workflows: ["Extracción"]
@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REMOTO: "drive:Anticipa Webscrapping/OUTPUT/senamhi_alertas_diaria"
+  REMOTO: "drive:Anticipa Webscrapping/OUTPUT"
+  CARPETAS: "senamhi_alertas_diaria clima_diario_senamhi"
 
 jobs:
   senamhi:
@@ -72,10 +73,12 @@ jobs:
         run: |
           $local = Join-Path $env:RUNNER_TEMP "output"
           if (Test-Path $local) { Remove-Item -Recurse -Force $local }
-          New-Item -ItemType Directory -Force (Join-Path $local "senamhi_alertas_diaria") | Out-Null
-          & $env:RCLONE mkdir $env:REMOTO
-          & $env:RCLONE copy $env:REMOTO (Join-Path $local "senamhi_alertas_diaria") --checksum
-          if ($LASTEXITCODE) { throw "No se pudo traer la carpeta de Drive" }
+          foreach ($c in $env:CARPETAS.Split(" ")) {
+            New-Item -ItemType Directory -Force (Join-Path $local $c) | Out-Null
+            & $env:RCLONE mkdir "$env:REMOTO/$c"
+            & $env:RCLONE copy "$env:REMOTO/$c" (Join-Path $local $c) --checksum
+            if ($LASTEXITCODE) { throw "No se pudo traer $c de Drive" }
+          }
           "CARPETA_LOCAL=$local" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Ejecutar SENAMHI
@@ -86,11 +89,15 @@ jobs:
           .venv\Scripts\python scripts\ejecutar_senamhi.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      # Solo se sube la carpeta del SENAMHI; el resto de OUTPUT no se toca.
+      # Solo se suben las carpetas del SENAMHI; el resto de OUTPUT no se toca.
+      # Sube también si un módulo falló, para no perder lo del otro.
       - name: Subir a Drive
+        if: always() && steps.traer.outcome == 'success'
         run: |
-          & $env:RCLONE sync (Join-Path $env:CARPETA_LOCAL "senamhi_alertas_diaria") $env:REMOTO --checksum --max-delete 20 --exclude "*.part"
-          if ($LASTEXITCODE) { throw "No se pudo subir a Drive" }
+          foreach ($c in $env:CARPETAS.Split(" ")) {
+            & $env:RCLONE sync (Join-Path $env:CARPETA_LOCAL $c) "$env:REMOTO/$c" --checksum --max-delete 20 --exclude "*.part"
+            if ($LASTEXITCODE) { throw "No se pudo subir $c a Drive" }
+          }
           "Subida a Drive completa"
 
       - name: Limpiar
