@@ -1,0 +1,99 @@
+name: SENAMHI
+
+# El sitio del SENAMHI no responde desde los servidores de GitHub, así que este
+# flujo corre en un runner propio (el PC, etiqueta "senamhi").
+# Se lanza al terminar cada corrida de "Extracción", para no coincidir con su
+# sincronización con Drive, y también a mano.
+# Solo lee y escribe la carpeta senamhi_alertas_diaria de Drive.
+on:
+  workflow_run:
+    workflows: ["Extracción"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Una sola corrida a la vez; si el PC estuvo apagado, solo queda la más reciente en espera.
+concurrency:
+  group: senamhi
+  cancel-in-progress: false
+
+env:
+  REMOTO: "drive:Anticipa Webscrapping/OUTPUT/senamhi_alertas_diaria"
+
+jobs:
+  senamhi:
+    runs-on: [self-hosted, Windows, senamhi]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      # actions/checkout v4.2.2, fijado a una versión exacta
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Instalar dependencias
+        run: |
+          $ErrorActionPreference = "Stop"
+          $herr = Join-Path $env:RUNNER_TEMP "herramientas"
+          New-Item -ItemType Directory -Force $herr | Out-Null
+          # rclone con versión y firma fijas
+          $rclone = Join-Path $herr "rclone.exe"
+          if (-not (Test-Path $rclone)) {
+            $zip = Join-Path $herr "rclone.zip"
+            Invoke-WebRequest -UseBasicParsing -Uri "https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-windows-amd64.zip" -OutFile $zip
+            $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            if ($hash -ne "8a9db2bad1dc79a65b3348fd857069598e2aab7cf4d118b77b1df23055aff818") { throw "Huella de rclone incorrecta: $hash" }
+            Expand-Archive $zip -DestinationPath $herr -Force
+            Copy-Item (Join-Path $herr "rclone-v1.75.2-windows-amd64\rclone.exe") $rclone
+          }
+          & $rclone version | Select-Object -First 1
+          py -3 -m venv .venv
+          if ($LASTEXITCODE) { throw "No se pudo crear el entorno de Python" }
+          .venv\Scripts\python -m pip install --quiet --disable-pip-version-check -r requirements.txt
+          if ($LASTEXITCODE) { throw "No se pudieron instalar las dependencias" }
+          "RCLONE=$rclone" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # La configuración de Drive vive solo durante la corrida, en la carpeta temporal del runner.
+      - name: Configurar acceso a Drive
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          $conf = Join-Path $env:RUNNER_TEMP "rclone.conf"
+          [IO.File]::WriteAllText($conf, ($env:RCLONE_CONF -replace "`r", ""))
+          "RCLONE_CONFIG=$conf" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Traer la carpeta desde Drive
+        id: traer
+        run: |
+          $local = Join-Path $env:RUNNER_TEMP "output"
+          if (Test-Path $local) { Remove-Item -Recurse -Force $local }
+          New-Item -ItemType Directory -Force (Join-Path $local "senamhi_alertas_diaria") | Out-Null
+          & $env:RCLONE mkdir $env:REMOTO
+          & $env:RCLONE copy $env:REMOTO (Join-Path $local "senamhi_alertas_diaria") --checksum
+          if ($LASTEXITCODE) { throw "No se pudo traer la carpeta de Drive" }
+          "CARPETA_LOCAL=$local" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Ejecutar SENAMHI
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          $env:OUTPUT_WEBSCRAPING = $env:CARPETA_LOCAL
+          .venv\Scripts\python scripts\ejecutar_senamhi.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # Solo se sube la carpeta del SENAMHI; el resto de OUTPUT no se toca.
+      - name: Subir a Drive
+        run: |
+          & $env:RCLONE sync (Join-Path $env:CARPETA_LOCAL "senamhi_alertas_diaria") $env:REMOTO --checksum --max-delete 20 --exclude "*.part"
+          if ($LASTEXITCODE) { throw "No se pudo subir a Drive" }
+          "Subida a Drive completa"
+
+      - name: Limpiar
+        if: always()
+        run: |
+          Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP "rclone.conf")
+          if ($env:CARPETA_LOCAL) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $env:CARPETA_LOCAL }
