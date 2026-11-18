@@ -29,7 +29,9 @@ def main():
             faltan = [m for m in OTROS_MODULOS + MODULOS_SENAMHI if m not in entorno]
             if faltan:
                 raise RuntimeError(f"La configuración no define: {', '.join(faltan)}")
-            entorno.update({m: False for m in OTROS_MODULOS})
+            # Apaga todos los demás módulos, también los que se agreguen después.
+            entorno.update({m: False for m in list(entorno)
+                            if m.startswith("EJECUTAR_") and m not in MODULOS_SENAMHI})
             entorno.update({m: True for m in MODULOS_SENAMHI})
 
     fallidos = [m["Módulo"] for m in entorno["resumen_modulos"] if m["Estado"] == "FALLÓ"]
