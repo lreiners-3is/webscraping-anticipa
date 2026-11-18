@@ -28,7 +28,8 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        shell: powershell
+        # Windows bloquea scripts por defecto; se permite solo para los pasos de este flujo.
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       # actions/checkout v4.2.2, fijado a una versión exacta
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
